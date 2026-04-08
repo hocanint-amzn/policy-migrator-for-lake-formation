@@ -6,6 +6,7 @@ from config.configuration_exceptions import ConfigurationInvalidException
 import awswrangler as wr
 import pandas as pd
 import boto3
+import re
 
 import logging
 logger = logging.getLogger(__name__)
@@ -39,6 +40,8 @@ class GlueEventCloudTrailPolicyReader(PolicyReaderInterface):
         self._validate_application_conf()
         logger.info("Reading policies from CloudTrail from Glue Data Catalog access.")
 
+        cloudtrail_table_ref = '"{}"."{}"'.format(self._config["athena_cloudtrail_database"], self._config["athena_cloudtrail_table"])  # nosec B608 - SQL identifiers are validated in _validate_application_conf
+
         sql = f"""WITH cloudtrail as (
                 SELECT *, 
                     CASE
@@ -47,7 +50,7 @@ class GlueEventCloudTrailPolicyReader(PolicyReaderInterface):
                         WHEN eventname in ('GetTable','GetTablesVersion','GetTablesVersions','GetPartition','GetUnfilteredPartition','GetInternalUnfilteredPartition','GetInternalUnfilteredPartitions','GetPartitions','GetUnfilteredPartitions','BatchGetPartition','GetPartitionIndexes','DESCRIBE','UpdateTable','DeleteTableVersion','BatchDeleteTableVersion','BatchCreatePartition','CreatePartition','DeletePartition','BatchDeletePartition','UpdatePartition','BatchUpdatePartition','CreatePartitionIndex','DeletePartitionIndex','DeleteTable') THEN 'TABLE'
                     END as resource_level
                     FROM
-                    \"{self._config["athena_cloudtrail_database"]}\".\"{self._config["athena_cloudtrail_table"]}\"
+                    {cloudtrail_table_ref}
                     WHERE
                     eventsource = 'glue.amazonaws.com' and 
                     eventname in ('GetDatabase',
@@ -187,10 +190,18 @@ class GlueEventCloudTrailPolicyReader(PolicyReaderInterface):
 
         return permissions_list
 
+    _ATHENA_IDENTIFIER_PATTERN = re.compile(r'^[a-zA-Z0-9_]+$')
+
     def _validate_application_conf(self):
         for key in self._REQUIRED_CONFIGURATION:
             if key not in self._config:
                 raise ConfigurationInvalidException("GlueCloudTrail Reader: Missing configuration for " + key)
+        for key in ("athena_cloudtrail_database", "athena_cloudtrail_table"):
+            if not self._ATHENA_IDENTIFIER_PATTERN.match(self._config[key]):
+                raise ConfigurationInvalidException(
+                    f"GlueCloudTrail Reader: Invalid Athena identifier for '{key}': "
+                    f"'{self._config[key]}'. Only alphanumeric characters and underscores are allowed."
+                )
 
     @classmethod
     def get_name(cls):

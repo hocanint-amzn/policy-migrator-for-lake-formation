@@ -9,6 +9,7 @@ from config.configuration_exceptions import ConfigurationInvalidException
 
 import awswrangler as wr
 import pandas as pd
+import re
 
 import logging
 logger = logging.getLogger(__name__)
@@ -42,6 +43,8 @@ class S3CloudTrailDataEventsReader(PolicyReaderInterface):
         self._validate_application_conf()
         logger.info("Reading policies from CloudTrail for S3 access.")
 
+        cloudtrail_table_ref = '"{}"."{}"'.format(self._config["athena_cloudtrail_database"], self._config["athena_cloudtrail_table"])  # nosec B608 - SQL identifiers are validated in _validate_application_conf
+
         sql = f"""WITH
                     cloudtrail AS (
                         SELECT 
@@ -63,7 +66,7 @@ class S3CloudTrailDataEventsReader(PolicyReaderInterface):
                         FROM 
                             ( SELECT *, json_extract_scalar(requestparameters, '$.key') as s3_key, 
                                     json_extract_scalar(requestparameters, '$.bucketName') as s3_bucket
-                                FROM \"{self._config["athena_cloudtrail_database"]}\".\"{self._config["athena_cloudtrail_table"]}\" )
+                                FROM {cloudtrail_table_ref} )
                                     cloudtrail
                         WHERE eventname in ('GetObject','HeadObject','PutObject','CreateMultipartUpload', 'UploadPart','UploadPartCopy','DeleteObject')
                             AND errorcode IS NULL
@@ -118,10 +121,18 @@ class S3CloudTrailDataEventsReader(PolicyReaderInterface):
             permissions_list.add_permission_record(permission_record)
         return permissions_list
 
+    _ATHENA_IDENTIFIER_PATTERN = re.compile(r'^[a-zA-Z0-9_]+$')
+
     def _validate_application_conf(self):
         for key in self._REQUIRED_CONFIGURATION:
             if key not in self._config:
                 raise ConfigurationInvalidException("GlueCloudTrail Reader: Missing configuration for " + key)
+        for key in ("athena_cloudtrail_database", "athena_cloudtrail_table"):
+            if not self._ATHENA_IDENTIFIER_PATTERN.match(self._config[key]):
+                raise ConfigurationInvalidException(
+                    f"S3CloudTrail Reader: Invalid Athena identifier for '{key}': "
+                    f"'{self._config[key]}'. Only alphanumeric characters and underscores are allowed."
+                )
 
     @classmethod
     def get_name(cls):
